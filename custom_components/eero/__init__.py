@@ -398,25 +398,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             activity=conf_activity[network_id],
             profiles=resources[CONF_PROFILES],
             get_backup_access_points=bool(resources[CONF_BACKUP_NETWORKS]),
-            get_devices=any(
-                [
-                    resources[CONF_WIRED_CLIENTS_FILTER] == CONF_FILTER_EXCLUDE,
-                    all(
-                        [
-                            resources[CONF_WIRED_CLIENTS_FILTER] == CONF_FILTER_INCLUDE,
-                            bool(resources[CONF_WIRED_CLIENTS]),
-                        ]
-                    ),
-                    resources[CONF_WIRELESS_CLIENTS_FILTER] == CONF_FILTER_EXCLUDE,
-                    all(
-                        [
-                            resources[CONF_WIRELESS_CLIENTS_FILTER]
-                            == CONF_FILTER_INCLUDE,
-                            bool(resources[CONF_WIRELESS_CLIENTS]),
-                        ]
-                    ),
-                ]
-            ),
+            # Always fetch the device list: network-wide sensors (connected clients,
+            # guest clients, per-category counts) are computed from it even when no
+            # client devices are selected for tracking. Client entities are still only
+            # created for the clients selected in the options.
+            get_devices=True,
             get_release_notes=True,
         )
 
@@ -614,7 +600,7 @@ class EeroEntity(CoordinatorEntity):
             if self.suffix_connection_type:
                 name = self.resource.name_connection_type
 
-        entry_type, suggested_area, sw_version, hw_version, via_device = (
+        entry_type, suggested_area, sw_version, hw_version, via_device_id = (
             None,
             None,
             None,
@@ -641,9 +627,9 @@ class EeroEntity(CoordinatorEntity):
                 self.resource.is_client,
             ]
         ):
-            via_device = (DOMAIN, self.network.id)
+            via_device_id = self._network_device_id()
 
-        return dr.DeviceInfo(
+        device_info = dr.DeviceInfo(
             entry_type=entry_type,
             hw_version=hw_version,
             identifiers={(DOMAIN, self.resource.id)},
@@ -652,8 +638,30 @@ class EeroEntity(CoordinatorEntity):
             name=name,
             suggested_area=suggested_area,
             sw_version=sw_version,
-            via_device=via_device,
         )
+        if via_device_id:
+            device_info["via_device_id"] = via_device_id
+        return device_info
+
+    def _network_device_id(self) -> str | None:
+        """Return the device registry id of this entity's network device.
+
+        DeviceInfo's `via_device` (an identifier tuple) is deprecated in favour of
+        `via_device_id` (a registry id). Besides the 2027.8 removal, the deprecated
+        form raises when core re-adds an entity outside integration code (e.g. after
+        an entity_id rename), which left renamed entities unavailable until reload.
+        The network device is registered in async_setup_entry before platforms load.
+        """
+        registry = dr.async_get(self.hass)
+        identifier = (DOMAIN, self.network.id)
+        platform = getattr(self, "platform", None)
+        if hasattr(registry, "async_get_device_by_identifier") and platform and platform.config_entry:
+            device = registry.async_get_device_by_identifier(
+                identifier, platform.config_entry.entry_id
+            )
+        else:
+            device = registry.async_get_device(identifiers={identifier})
+        return device.id if device else None
 
     @property
     def name(self) -> str:
