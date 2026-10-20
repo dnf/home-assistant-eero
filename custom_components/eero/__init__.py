@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 import logging
 from typing import Any
 
@@ -12,7 +13,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL, Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     HomeAssistantError,
@@ -465,25 +466,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             activity=conf_activity.get(network_id, {}),
             profiles=resources[CONF_PROFILES],
             get_backup_access_points=bool(resources[CONF_BACKUP_NETWORKS]),
-            get_devices=any(
-                [
-                    resources[CONF_WIRED_CLIENTS_FILTER] == CONF_FILTER_EXCLUDE,
-                    all(
-                        [
-                            resources[CONF_WIRED_CLIENTS_FILTER] == CONF_FILTER_INCLUDE,
-                            bool(resources[CONF_WIRED_CLIENTS]),
-                        ]
-                    ),
-                    resources[CONF_WIRELESS_CLIENTS_FILTER] == CONF_FILTER_EXCLUDE,
-                    all(
-                        [
-                            resources[CONF_WIRELESS_CLIENTS_FILTER]
-                            == CONF_FILTER_INCLUDE,
-                            bool(resources[CONF_WIRELESS_CLIENTS]),
-                        ]
-                    ),
-                ]
-            ),
+            # Always fetch the device list: network-wide sensors (connected clients,
+            # guest clients, per-category counts) are computed from it even when no
+            # client devices are selected for tracking. Client entities are still only
+            # created for the clients selected in the options.
+            get_devices=True,
             get_release_notes=True,
         )
 
@@ -640,30 +627,21 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             )
         return validated_profile
 
+    # Services are shared by every eero account: each entry keeps its own handlers,
+    # the service is registered once (dispatching to the entries that offer it) and
+    # removed when the last such entry unloads. See _async_register_services.
+    handlers = {
+        SERVICE_SET_RESERVATION: async_set_reservation,
+        SERVICE_DELETE_RESERVATION: async_delete_reservation,
+    }
     if [
         profile
         for resources in conf_resources.values()
         for profile in resources[CONF_PROFILES]
     ]:
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SET_BLOCKED_APPS,
-            async_set_blocked_apps,
-            schema=SET_BLOCKED_APPS_SCHEMA,
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_RESERVATION,
-        async_set_reservation,
-        schema=SET_RESERVATION_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_RESERVATION,
-        async_delete_reservation,
-        schema=DELETE_RESERVATION_SCHEMA,
-    )
+        handlers[SERVICE_SET_BLOCKED_APPS] = async_set_blocked_apps
+    hass.data[DOMAIN][config_entry.entry_id][DATA_SERVICE_HANDLERS] = handlers
+    _async_register_services(hass)
 
     for network in coordinator.data.networks:
         if network.id in conf_networks:
@@ -679,6 +657,79 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     return True
 
+
+
+DATA_SERVICE_HANDLERS = "service_handlers"
+SERVICE_SCHEMAS = {
+    SERVICE_SET_BLOCKED_APPS: SET_BLOCKED_APPS_SCHEMA,
+    SERVICE_SET_RESERVATION: SET_RESERVATION_SCHEMA,
+    SERVICE_DELETE_RESERVATION: DELETE_RESERVATION_SCHEMA,
+}
+
+
+def _entries_offering(hass: HomeAssistant, service: str) -> list[dict[str, Any]]:
+    """Loaded entries whose handlers include this service."""
+    return [
+        entry_data
+        for entry_data in hass.data.get(DOMAIN, {}).values()
+        if service in entry_data.get(DATA_SERVICE_HANDLERS, {})
+    ]
+
+
+def _network_matches(network: Any, target_network: Any) -> bool:
+    return any(
+        [not target_network, network.id in target_network, network.name in target_network]
+    )
+
+
+async def _async_dispatch_service(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Run a service call against the entries that should handle it.
+
+    set_blocked_apps applies to the matching profiles of every entry, as it does
+    within one entry. The reservation services change exactly one network, so the
+    call goes to the one entry that owns the target network.
+    """
+    entries = _entries_offering(hass, call.service)
+    if call.service == SERVICE_SET_BLOCKED_APPS:
+        for entry_data in entries:
+            await entry_data[DATA_SERVICE_HANDLERS][call.service](call)
+        return
+    target = call.data.get(ATTR_TARGET_NETWORK)
+    owners = [
+        entry_data
+        for entry_data in entries
+        if any(
+            _network_matches(network, target)
+            for network in entry_data[DATA_COORDINATOR].data.networks
+            if network is not None
+        )
+    ]
+    if not owners:
+        raise ServiceValidationError("No eero network matches target_network")
+    if len(owners) > 1:
+        raise ServiceValidationError(
+            "target_network matches networks in more than one eero account; "
+            "name one network in target_network"
+        )
+    await owners[0][DATA_SERVICE_HANDLERS][call.service](call)
+
+
+@callback
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register each service some loaded entry offers, once."""
+    for service, schema in SERVICE_SCHEMAS.items():
+        if _entries_offering(hass, service) and not hass.services.has_service(DOMAIN, service):
+            hass.services.async_register(
+                DOMAIN, service, partial(_async_dispatch_service, hass), schema=schema
+            )
+
+
+@callback
+def _async_unregister_unused_services(hass: HomeAssistant) -> None:
+    """Remove services no loaded entry offers any more (e.g. the last entry unloaded)."""
+    for service in SERVICE_SCHEMAS:
+        if not _entries_offering(hass, service) and hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)
 
 
 async def async_remove_config_entry_device(
@@ -720,6 +771,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         entry_data = hass.data[DOMAIN].pop(config_entry.entry_id)
         entry_data[DATA_UPDATE_LISTENER]()
         await hass.async_add_executor_job(entry_data[DATA_API].session.close)
+        _async_unregister_unused_services(hass)
 
     return unload_ok
 
