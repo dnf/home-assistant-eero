@@ -147,6 +147,15 @@ SENSOR_DESCRIPTIONS: list[EeroSensorEntityDescription] = [
         native_unit_of_measurement="clients",
     ),
     EeroSensorEntityDescription(
+        key="wireless_clients_count",
+        name="Wi-Fi Clients",
+        icon="mdi:wifi",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="clients",
+        # Every connected wireless client, weakest signal first (wifi_summary.py).
+        extra_attrs={"clients": lambda resource: resource.wireless_clients_summary},
+    ),
+    EeroSensorEntityDescription(
         key="connected_guest_clients_count",
         name="Connected Guest Clients",
         state_class=SensorStateClass.MEASUREMENT,

@@ -23,6 +23,7 @@ from .firmware import EeroFirmware
 from .profile import EeroProfile
 from .resource import EeroResource
 from .util import premium_ok
+from .wifi_summary import summarize_wireless_clients
 
 
 class EeroNetwork(EeroResource):
@@ -238,6 +239,18 @@ class EeroNetwork(EeroResource):
     def connected_clients_count(self) -> int:
         """Connected clients count."""
         return len([client for client in self.clients if client.connected])
+
+    @property
+    def wireless_clients_count(self) -> int:
+        """Connected wireless clients count."""
+        return len(
+            [client for client in self.clients if client.connected and client.wireless]
+        )
+
+    @property
+    def wireless_clients_summary(self) -> list[dict]:
+        """Signal, band and serving eero for every connected wireless client."""
+        return summarize_wireless_clients([client.data for client in self.clients])
 
     @property
     def connected_clients_count_computers_personal(self) -> int:
