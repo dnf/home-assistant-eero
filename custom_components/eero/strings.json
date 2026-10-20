@@ -14,7 +14,7 @@
                 "data": {
                     "login": "Login (email or SMS phone number)"
                 },
-                "description": "Enter the email address or SMS phone number (including country code) associated with your account.",
+                "description": "Enter the email address or SMS phone number (including country code) associated with your account.\n\n**New account?** If you created an eero account just for Home Assistant, verify its email address first (use the link in the email from eero). Unverified accounts can't log in.\n\nAccounts that sign in with \"Continue with Amazon\" aren't supported. Instead, add a network admin in the eero app that signs in with an email address or phone number, and use that login here.",
                 "title": "Login to Eero account"
             },
             "verify": {
