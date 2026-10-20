@@ -248,7 +248,9 @@ class EeroAPI:
             else:
                 raise EeroException(
                     code=response.status_code,
-                    error=response.reason,
+                    # eero's own error key (e.g. "error.login.unknown") is more useful
+                    # to callers than the HTTP reason ("Unauthorized").
+                    error=error or response.reason,
                     message=f"Bad response received from URL: {response.url}",
                     payload=response.text,
                 )
