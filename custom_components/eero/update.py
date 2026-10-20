@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import EeroEntity, EeroEntityDescription
 from .update_title import firmware_title
+from .update_version import latest_firmware_version
 from .const import (
     CONF_EEROS,
     CONF_MISCELLANEOUS,
@@ -97,8 +98,12 @@ class EeroUpdateEntity(EeroEntity, UpdateEntity):
 
     @property
     def latest_version(self) -> str | None:
-        """Latest version available for install."""
-        return self.resource.target_firmware.os_version
+        """Latest version available for install (see update_version.py)."""
+        return latest_firmware_version(
+            self.installed_version,
+            self.resource.target_firmware.os_version,
+            self.resource.update_available,
+        )
 
     @property
     def release_summary(self) -> str | None:

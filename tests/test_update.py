@@ -147,3 +147,49 @@ def test_resource_that_disappears_between_polls() -> None:
     ids = [resource.id for resource in after.resources]
     assert client_id not in ids
     assert "11:22:33:44:55:66" in ids
+
+
+EEROS = f"{NETWORK}/eeros"
+
+
+def _network_with_eeros(os_version: str) -> dict:
+    """The network fixture with an eeros resource and one embedded eero."""
+    network = fixture("network")
+    network["resources"] = {**network["resources"], "eeros": EEROS}
+    network["eeros"] = {
+        "count": 1,
+        "data": [{"url": "/2.2/eeros/111", "location": "Office", "model": "eero Pro 6E", "os_version": os_version}],
+    }
+    return network
+
+
+def test_eeros_are_read_from_their_resource_url() -> None:
+    """The eeros resource replaces the (possibly stale) embedded copy."""
+    routes = full_routes(network=_network_with_eeros("v7.16.0"))
+    routes[EEROS] = ok([{"url": "/2.2/eeros/111", "location": "Office", "model": "eero Pro 6E", "os_version": "v7.17.2"}])
+    api = build_api(routes)
+
+    network = api.update().networks[0]
+
+    assert [eero.os_version for eero in network.eeros] == ["v7.17.2"]
+
+
+def test_a_failed_eeros_read_keeps_the_embedded_data() -> None:
+    """A server error on the eeros resource must not fail the whole poll."""
+    routes = full_routes(network=_network_with_eeros("v7.16.0"))
+    routes[EEROS] = FakeResponse(fixture("error_server"), status_code=500, reason="Internal Server Error")
+    api = build_api(routes)
+
+    network = api.update().networks[0]
+
+    assert [eero.os_version for eero in network.eeros] == ["v7.16.0"]
+
+
+def test_a_rate_limited_eeros_read_still_propagates() -> None:
+    """Rate limiting is not swallowed by the fallback (M2)."""
+    routes = full_routes(network=_network_with_eeros("v7.16.0"))
+    routes[EEROS] = FakeResponse(fixture("error_rate_limited"), status_code=429, reason="Too Many Requests")
+    api = build_api(routes)
+
+    with pytest.raises(eero_api.EeroRateLimited):
+        api.update()

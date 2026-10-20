@@ -454,6 +454,25 @@ class EeroAPI:
                         "data": backup_access_points,
                     }
 
+                # The eeros embedded in the network response can carry a stale
+                # os_version; the eeros resource has current data. Session and rate
+                # limit errors still propagate (C3, M2); any other failure keeps the
+                # embedded data rather than failing the poll. Idea from
+                # ColinSummers/home-assistant-eero (stale firmware fix).
+                if network_data.get("resources", {}).get("eeros"):
+                    try:
+                        network_data["eeros"] = self.get_resource_data(
+                            network_data, "eeros"
+                        )
+                    except (EeroSessionExpired, EeroRateLimited):
+                        raise
+                    except EeroException as err:
+                        _LOGGER.debug(
+                            "Keeping embedded eero data for network %s: %s",
+                            network_id,
+                            err,
+                        )
+
                 if any(
                     [
                         not config,
