@@ -44,6 +44,7 @@ from .const import (
     CONF_RESOURCES,
     CONF_SAVE_RESPONSES,
     CONF_SHOW_EERO_LOGO,
+    CONF_CONFIGURE_ADVANCED,
     CONF_SUFFIX_CONNECTION_TYPE,
     CONF_TIMEOUT,
     CONF_USER_TOKEN,
@@ -90,6 +91,7 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.index = 0
         self.response = None
         self.user_input = {}
+        self.configure_advanced = False
 
     @property
     def config_title(self) -> str:
@@ -111,7 +113,13 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error(
                     "Status: %s, Error Message: %s", exception.code, exception.error
                 )
-                errors["base"] = "invalid_login"
+                # eero answers "error.login.unknown" both for logins with no eero
+                # account and for accounts that sign in with Amazon (or aren't
+                # verified yet), so say that rather than a bare "Invalid login".
+                if exception.error == "error.login.unknown":
+                    errors["base"] = "login_unknown"
+                else:
+                    errors["base"] = "invalid_login"
             else:
                 self.user_input[CONF_LOGIN] = user_input[CONF_LOGIN]
                 self.user_input[CONF_USER_TOKEN] = self.response["user_token"]
@@ -443,11 +451,14 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         ],
                         CONF_SHOW_EERO_LOGO: user_input[CONF_SHOW_EERO_LOGO],
                     }
+                    self.configure_advanced = self.configure_advanced or user_input.get(
+                        CONF_CONFIGURE_ADVANCED, False
+                    )
                     self.index += 1
 
         if self.index == len(self.user_input[CONF_NETWORKS]):
             self.index = 0
-            if self.show_advanced_options:
+            if self.configure_advanced:
                 return await self.async_step_advanced()
             return self.async_create_entry(
                 title=self.config_title, data=self.user_input
@@ -482,6 +493,10 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             ): BooleanSelector(),
                             vol.Optional(
                                 CONF_SHOW_EERO_LOGO, default=DEFAULT_SHOW_EERO_LOGO
+                            ): BooleanSelector(),
+                            # Replaces show_advanced_options (removed in HA 2027.6).
+                            vol.Optional(
+                                CONF_CONFIGURE_ADVANCED, default=False
                             ): BooleanSelector(),
                         }
                     ),
@@ -557,6 +572,7 @@ class EeroOptionsFlowHandler(config_entries.OptionsFlow):
         self.index = 0
         self.response = None
         self.user_input = {}
+        self.configure_advanced = False
 
     @property
     def data(self) -> dict[str, Any]:
@@ -909,11 +925,14 @@ class EeroOptionsFlowHandler(config_entries.OptionsFlow):
                         ],
                         CONF_SHOW_EERO_LOGO: user_input[CONF_SHOW_EERO_LOGO],
                     }
+                    self.configure_advanced = self.configure_advanced or user_input.get(
+                        CONF_CONFIGURE_ADVANCED, False
+                    )
                     self.index += 1
 
         if self.index == len(self.user_input[CONF_NETWORKS]):
             self.index = 0
-            if self.show_advanced_options:
+            if self.configure_advanced:
                 return await self.async_step_advanced()
             return self.async_create_entry(title="", data=self.user_input)
         if self.index == 0:
@@ -963,6 +982,10 @@ class EeroOptionsFlowHandler(config_entries.OptionsFlow):
                             ): BooleanSelector(),
                             vol.Optional(
                                 CONF_SHOW_EERO_LOGO, default=conf_show_eero_logo
+                            ): BooleanSelector(),
+                            # Replaces show_advanced_options (removed in HA 2027.6).
+                            vol.Optional(
+                                CONF_CONFIGURE_ADVANCED, default=False
                             ): BooleanSelector(),
                         }
                     ),
