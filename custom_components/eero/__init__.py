@@ -6,6 +6,7 @@ from asyncio import timeout
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 import logging
 from typing import Any
 
@@ -13,7 +14,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -452,55 +453,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         DATA_UPDATE_LISTENER: config_entry.add_update_listener(async_update_listener),
     }
 
-    async def async_set_blocked_apps(service):
-        blocked_apps = service.data[ATTR_BLOCKED_APPS]
-        for profile in _validate_profile(
-            target_profile=service.data[ATTR_TARGET_PROFILE],
-            target_network=service.data[ATTR_TARGET_NETWORK],
-        ):
-            await hass.async_add_executor_job(
-                profile.set_blocked_applications, blocked_apps
-            )
-        await coordinator.async_request_refresh()
-
-    def _validate_network(target_network: str):
-        return [
-            network
-            for network in coordinator.data.networks
-            if any(
-                [
-                    not target_network,
-                    network.id in target_network,
-                    network.name in target_network,
-                ]
-            )
-        ]
-
-    def _validate_profile(target_profile: str, target_network: str):
-        validated_profile = []
-        for network in _validate_network(target_network=target_network):
-            validated_profile.extend(
-                profile
-                for profile in network.profiles
-                if any(
-                    [
-                        not target_profile,
-                        profile.id in target_profile,
-                        profile.name in target_profile,
-                    ]
-                )
-            )
-        return validated_profile
-
+    # One service for every eero account: registered by the first entry that has
+    # profiles, resolved against all loaded entries at call time, and removed when
+    # the last entry unloads (see async_unload_entry).
     if [
         profile
         for resources in conf_resources.values()
         for profile in resources[CONF_PROFILES]
-    ]:
+    ] and not hass.services.has_service(DOMAIN, SERVICE_SET_BLOCKED_APPS):
         hass.services.async_register(
             DOMAIN,
             SERVICE_SET_BLOCKED_APPS,
-            async_set_blocked_apps,
+            partial(_async_set_blocked_apps, hass),
             schema=SET_BLOCKED_APPS_SCHEMA,
         )
 
@@ -527,8 +491,58 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
     if unload_ok:
         hass.data[DOMAIN][config_entry.entry_id][DATA_UPDATE_LISTENER]()
         hass.data[DOMAIN].pop(config_entry.entry_id)
+        if not hass.data[DOMAIN]:
+            hass.services.async_remove(DOMAIN, SERVICE_SET_BLOCKED_APPS)
 
     return unload_ok
+
+
+def _target_profiles(
+    hass: HomeAssistant, target_profile: str | None, target_network: str | None
+) -> list[tuple[DataUpdateCoordinator, Any]]:
+    """Return (coordinator, profile) pairs matching the targets across all entries."""
+    matches = []
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        coordinator = entry_data[DATA_COORDINATOR]
+        for network in coordinator.data.networks:
+            if not any(
+                [
+                    not target_network,
+                    network.id in target_network,
+                    network.name in target_network,
+                ]
+            ):
+                continue
+            matches.extend(
+                (coordinator, profile)
+                for profile in network.profiles
+                if any(
+                    [
+                        not target_profile,
+                        profile.id in target_profile,
+                        profile.name in target_profile,
+                    ]
+                )
+            )
+    return matches
+
+
+async def _async_set_blocked_apps(hass: HomeAssistant, service: ServiceCall) -> None:
+    """Set blocked applications for the targeted profiles."""
+    blocked_apps = service.data[ATTR_BLOCKED_APPS]
+    coordinators = []
+    for coordinator, profile in _target_profiles(
+        hass,
+        target_profile=service.data.get(ATTR_TARGET_PROFILE),
+        target_network=service.data.get(ATTR_TARGET_NETWORK),
+    ):
+        await hass.async_add_executor_job(
+            profile.set_blocked_applications, blocked_apps
+        )
+        if coordinator not in coordinators:
+            coordinators.append(coordinator)
+    for coordinator in coordinators:
+        await coordinator.async_request_refresh()
 
 
 async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
