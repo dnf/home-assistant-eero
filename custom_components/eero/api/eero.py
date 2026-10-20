@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import time
 
+from .backhaul import backhaul_type, summarize_backhaul
 from .const import (
     METHOD_POST,
     METHOD_PUT,
@@ -77,6 +78,28 @@ class EeroDevice(EeroResource):
             if eero["url"] == self.url:
                 return (eero["download"], eero["upload"])
         return (None, None)
+
+    @property
+    def backhaul(self) -> str | None:
+        """Backhaul: wired or wireless."""
+        return backhaul_type(self.data)
+
+    @property
+    def backhaul_details(self) -> dict:
+        """Upstream eero and band, link speed, wired neighbors, primary node."""
+        return summarize_backhaul(
+            self.data,
+            {
+                eero.serial: eero.location
+                for eero in self.network.eeros
+                if eero.serial and eero.location
+            },
+        )
+
+    @property
+    def mesh_quality_bars(self) -> int | None:
+        """Mesh quality (0-5 bars)."""
+        return self.data.get("mesh_quality_bars")
 
     @property
     def is_gateway(self) -> bool | None:

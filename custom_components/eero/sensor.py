@@ -25,6 +25,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
 from . import EeroEntity, EeroEntityDescription
+from .api.backhaul import BACKHAUL_WIRED, BACKHAUL_WIRELESS
 from .api.const import (
     DEVICE_CATEGORY_COMPUTERS_PERSONAL,
     DEVICE_CATEGORY_ENTERTAINMENT,
@@ -139,6 +140,20 @@ SENSOR_DESCRIPTIONS: list[EeroSensorEntityDescription] = [
         if resource.is_network
         else getattr(resource, key),
         activity_type=True,
+    ),
+    EeroSensorEntityDescription(
+        key="backhaul",
+        name="Backhaul",
+        icon="mdi:lan-connect",
+        device_class=SensorDeviceClass.ENUM,
+        options=[BACKHAUL_WIRED, BACKHAUL_WIRELESS],
+    ),
+    EeroSensorEntityDescription(
+        key="mesh_quality_bars",
+        name="Mesh Quality",
+        icon="mdi:signal-cellular-3",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="bars",
     ),
     EeroSensorEntityDescription(
         key="connected_clients_count",
@@ -465,6 +480,8 @@ class EeroSensorEntity(EeroEntity, SensorEntity):
             data = getattr(self.resource, self.entity_description.key)
             if isinstance(data, dict):
                 attrs = {key: value for key, value in data.items() if key != "blocked"}
+        if self.entity_description.key == "backhaul":
+            attrs.update(self.resource.backhaul_details)
         if self.entity_description.key.startswith("data_usage"):
             attrs["download"], attrs["upload"] = getattr(
                 self.resource, self.entity_description.key
