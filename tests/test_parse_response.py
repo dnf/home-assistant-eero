@@ -216,3 +216,30 @@ def test_unknown_method_makes_no_request() -> None:
 
     assert api.call(method="PATCH", url=ACCOUNT) is None
     assert api.session.calls == []
+
+
+def test_error_carries_eeros_error_key_not_the_http_reason() -> None:
+    """An API error keeps eero's own key, so callers can tell failures apart.
+
+    The login step needs this: eero answers an unknown login (no eero account,
+    an Amazon-linked account, or an unverified one) with error.login.unknown.
+    """
+    login = "/2.2/login"
+    body = {"meta": {"code": 401, "error": "error.login.unknown"}}
+    api = build_api({login: FakeResponse(body, status_code=401, reason="Unauthorized")})
+
+    with pytest.raises(eero_api.EeroException) as excinfo:
+        api.call(method="POST", url=login, json={"login": "nobody@example.com"})
+
+    assert excinfo.value.error == "error.login.unknown"
+    assert excinfo.value.code == 401
+
+
+def test_error_without_an_eero_key_falls_back_to_the_http_reason() -> None:
+    """A body with no meta.error still reports the HTTP reason."""
+    api = build_api({ACCOUNT: FakeResponse({"meta": {"code": 404}}, status_code=404, reason="Not Found")})
+
+    with pytest.raises(eero_api.EeroException) as excinfo:
+        api.call(method="GET", url=ACCOUNT)
+
+    assert excinfo.value.error == "Not Found"

@@ -322,7 +322,7 @@ class EeroAPI:
             else:
                 raise EeroException(
                     code=response.status_code,
-                    error=response.reason,
+                    error=error or response.reason,  # eero's own key (e.g. error.login.unknown) beats "Unauthorized"
                     message=f"Bad response from {urlparse(response.url).path}",
                 )
         return self.decode_json(response).get("data")

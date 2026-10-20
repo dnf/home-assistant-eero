@@ -111,7 +111,13 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error(
                     "Status: %s, Error Message: %s", exception.code, exception.error
                 )
-                errors["base"] = "invalid_login"
+                # eero answers "error.login.unknown" both for logins with no eero
+                # account and for accounts that sign in with Amazon (or aren't
+                # verified yet), so say that rather than a bare "Invalid login".
+                if exception.error == "error.login.unknown":
+                    errors["base"] = "login_unknown"
+                else:
+                    errors["base"] = "invalid_login"
             else:
                 self.user_input[CONF_LOGIN] = user_input[CONF_LOGIN]
                 self.user_input[CONF_USER_TOKEN] = self.response["user_token"]
@@ -556,7 +562,13 @@ class EeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error(
                     "Status: %s, Error Message: %s", exception.code, exception.error
                 )
-                errors["base"] = "invalid_login"
+                # eero answers "error.login.unknown" both for logins with no eero
+                # account and for accounts that sign in with Amazon (or aren't
+                # verified yet), so say that rather than a bare "Invalid login".
+                if exception.error == "error.login.unknown":
+                    errors["base"] = "login_unknown"
+                else:
+                    errors["base"] = "invalid_login"
             else:
                 self.reauth_login = user_input[CONF_LOGIN]
                 self.reauth_token = self.response["user_token"]
